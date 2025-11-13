@@ -1,5 +1,19 @@
 import pandas as pd
 from datetime import datetime
+from typing import Tuple
+
+try:
+    import xlsxwriter  # noqa: F401
+
+    EXCEL_ENGINE = "xlsxwriter"
+except ModuleNotFoundError:
+    EXCEL_ENGINE = "openpyxl"
+    try:
+        import openpyxl  # noqa: F401
+    except ModuleNotFoundError as exc:
+        raise ModuleNotFoundError(
+            "Install 'xlsxwriter' or 'openpyxl' to enable Excel exports."
+        ) from exc
 
 # =========================
 # CONFIGURATION
@@ -73,8 +87,10 @@ def load_and_clean_dor(path: str, start_date: str, end_date: str) -> pd.DataFram
     return dor
 
 
-def load_and_clean_vp(path: str, start_date: str, end_date: str) -> pd.DataFrame:
-    """Load VP data, dedupe, filter by date, and aggregate by ID."""
+def load_and_clean_vp(
+    path: str, start_date: str, end_date: str
+) -> Tuple[pd.DataFrame, pd.DataFrame]:
+    """Load VP data, dedupe, filter by date, and aggregate by ID (while retaining detail)."""
     start = pd.to_datetime(start_date)
     end = pd.to_datetime(end_date)
 
@@ -117,7 +133,7 @@ def load_and_clean_vp(path: str, start_date: str, end_date: str) -> pd.DataFrame
         }
     )
 
-    return vp_grouped
+    return vp_grouped, vp_detail
 
 
 def merge_and_reconcile(dor: pd.DataFrame, vp: pd.DataFrame) -> pd.DataFrame:
@@ -150,7 +166,7 @@ if __name__ == "__main__":
 
     # Load and clean each source
     dor = load_and_clean_dor(DOR_PATH, START_DATE, END_DATE)
-    vp = load_and_clean_vp(VP_PATH, START_DATE, END_DATE)
+    vp, vp_detail = load_and_clean_vp(VP_PATH, START_DATE, END_DATE)
 
     # Merge
     merged = merge_and_reconcile(dor, vp)
@@ -301,8 +317,12 @@ summary_df = pd.DataFrame(summary_rows)
 # Prepare DOR and VP detail tables
 # -----------------------------
 dor_detail = dor.copy()
+dor_only_detail = merged.loc[
+    dor_only_effective_mask,
+    [DOR_ID_COL, DOR_TITLE_COL, DOR_AMOUNT_COL, DOR_PROGRAM_COL],
+].copy()
 
-# For VP detail, keep the key columns
+# VP detail tables
 vp_detail_report = vp_detail[
     [
         "Service Line Code",
@@ -311,13 +331,17 @@ vp_detail_report = vp_detail[
         "Transaction Amount",
     ]
 ].copy()
+vp_only_detail = merged.loc[
+    merged["_merge"] == "right_only",
+    [VP_ID_COL, VP_STUDY_CODE_COL, VP_AMOUNT_COL],
+].copy()
 
 # -----------------------------
 # Write to Excel with interactivity
 # -----------------------------
 output_file = "reconciliation_report.xlsx"
 
-with pd.ExcelWriter(output_file, engine="xlsxwriter") as writer:
+with pd.ExcelWriter(output_file, engine=EXCEL_ENGINE) as writer:
     # 1. Summary
     summary_df.to_excel(writer, sheet_name="Summary", index=False)
 
@@ -330,73 +354,8 @@ with pd.ExcelWriter(output_file, engine="xlsxwriter") as writer:
     # 4. VP detail (all transactions)
     vp_detail_report.to_excel(writer, sheet_name="VP_Detail", index=False)
 
-    workbook = writer.book
-
-    # 5. Interactive detail sheet
-    detail_sheet = workbook.add_worksheet("Study_Detail")
-    writer.sheets["Study_Detail"] = detail_sheet
-
-    # --- Dropdown setup ---
-    detail_sheet.write("A1", "Select Project ID:")
-    detail_sheet.write("B1", "")
-
-    # Matched_Studies has Project ID in column A starting at row 2
-    matched_n = len(matched_report)
-    # e.g., =Matched_Studies!$A$2:$A$101
-    dv_range = f"=Matched_Studies!$A$2:$A${matched_n + 1}"
-
-    detail_sheet.data_validation(
-        "B1",
-        {
-            "validate": "list",
-            "source": dv_range,
-        },
-    )
-
-    # Little labels
-    detail_sheet.write("A3", "DOR Detail for selected Project ID")
-    detail_sheet.write("A10", "VP Transactions for selected Project ID")
-
-    # Helper to convert 0-based column index to Excel column letters (A, B, ..., AA, AB, ...)
-    def colnum_to_excel_col(col_num: int) -> str:
-        col = ""
-        n = col_num + 1
-        while n > 0:
-            n, remainder = divmod(n - 1, 26)
-            col = chr(65 + remainder) + col
-        return col
-
-    # --- DOR detail FILTER formula ---
-    # dor_detail was written to DOR_Detail, columns start at A1, headers in row 1, data in row 2+
-    dor_cols = list(dor_detail.columns)
-    dor_last_col_letter = colnum_to_excel_col(len(dor_cols) - 1)  # e.g. 'D'
-    dor_data_range = f"DOR_Detail!A2:{dor_last_col_letter}1048576"  # large range
-    dor_id_col = "A"  # assuming Project ID is first col in dor_detail
-
-    # Write headers for DOR detail table
-    for c, col_name in enumerate(dor_cols):
-        detail_sheet.write(4, c, col_name)  # row 5 (0-based index 4)
-
-    # Dynamic FILTER formula for DOR detail (spills)
-    dor_filter_formula = (
-        f"=FILTER({dor_data_range}, DOR_Detail!{dor_id_col}2:{dor_id_col}1048576=$B$1)"
-    )
-    detail_sheet.write_formula(5, 0, dor_filter_formula)  # row 6, col A
-
-    # --- VP detail FILTER formula ---
-    vp_cols = list(vp_detail_report.columns)
-    vp_last_col_letter = colnum_to_excel_col(len(vp_cols) - 1)  # e.g. 'D'
-    vp_data_range = f"VP_Detail!A2:{vp_last_col_letter}1048576"
-    vp_id_col = "A"  # assuming Service Line Code is first col in vp_detail_report
-
-    # Write headers for VP detail table
-    for c, col_name in enumerate(vp_cols):
-        detail_sheet.write(11, c, col_name)  # row 12 (0-based index 11)
-
-    # FILTER VP rows where Service Line Code == selected Project ID
-    vp_filter_formula = (
-        f"=FILTER({vp_data_range}, VP_Detail!{vp_id_col}2:{vp_id_col}1048576=$B$1)"
-    )
-    detail_sheet.write_formula(12, 0, vp_filter_formula)  # row 13, col A
+    # 5. Unmatched summaries
+    dor_only_detail.to_excel(writer, sheet_name="DOR_Only", index=False)
+    vp_only_detail.to_excel(writer, sheet_name="VP_Only", index=False)
 
 print(f"\nExcel report written to: {output_file}")
