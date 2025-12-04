@@ -32,3 +32,6 @@ PIVOT (
 ORDER BY [RCP Project Title];';
 
 EXEC sys.sp_executesql @sql;
+
+
+SELECT INITCAP([Task Owner]) 
