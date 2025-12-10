@@ -1,4 +1,4 @@
-USE [Appian_KCP_DEV]
+USE [Appian_KCP]
 GO
 
 /****** Object:  View [dbo].[StudyAnalytics]    Script Date: 10/29/2025 11:16:17 AM ******/
@@ -33,5 +33,3 @@ ORDER BY [RCP Project Title];';
 
 EXEC sys.sp_executesql @sql;
 
-
-SELECT INITCAP([Task Owner]) 
