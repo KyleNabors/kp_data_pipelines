@@ -1,7 +1,7 @@
 USE [Appian_KCP]
 GO
 
-/****** Object:  View [dbo].[StudyAnalytics]    Script Date: 10/29/2025 11:16:17 AM ******/
+/****** Object:  View [dbo].[StudyAnalytics ******/
 SET ANSI_NULLS ON
 GO
 
